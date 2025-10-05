@@ -1,0 +1,13 @@
+
+{
+
+    "0x_api_key": "d0778e81-e1ae-467b-aef3-0d7c5f5ff279",
+    "birdeye_api_key": "2391fc5931f2403780b25891f8819777",
+    "db_path": "liquidity.db",
+    "chain_id": 8453,
+
+
+    "pair_addresses": [
+    "0x0FB597D6cFE5bE0d5258A7f017599C2A4Ece34c7"
+    ]
+}
