@@ -3,10 +3,6 @@
 init_db.py
 
 Schema: base/quote with base_address as the main identifier.
-- base_address: the asset being priced (main id)
-- pair_address: LP/pool contract address
-- quote_address: the pricing asset in the pair
-
 If ./config.json has {"db_path": "..."} it's used; otherwise ./liquidity.db.
 """
 
@@ -17,6 +13,7 @@ from pathlib import Path
 SCHEMA_SQL = """
 PRAGMA foreign_keys = ON;
 
+-- Token pairs (unchanged)
 CREATE TABLE IF NOT EXISTS token_pairs (
   base_address     TEXT NOT NULL,
   base_symbol      TEXT,
@@ -36,6 +33,26 @@ CREATE INDEX IF NOT EXISTS idx_token_pairs_pair
 
 CREATE INDEX IF NOT EXISTS idx_token_pairs_quote
   ON token_pairs(quote_address);
+
+-- Live price (one row per token)
+-- timestamp auto on INSERT; trigger updates it on price/symbol changes
+CREATE TABLE IF NOT EXISTS token_prices_live (
+  ca         TEXT PRIMARY KEY,                                  -- token contract address
+  symbol     TEXT,
+  price      REAL NOT NULL,                                     -- choose a single unit (e.g., USD or WETH)
+  timestamp  INTEGER NOT NULL DEFAULT (strftime('%s','now'))    -- UNIX seconds on INSERT
+);
+
+CREATE TRIGGER IF NOT EXISTS trg_token_prices_live_touch
+AFTER UPDATE OF price, symbol ON token_prices_live
+BEGIN
+  UPDATE token_prices_live
+  SET timestamp = strftime('%s','now')
+  WHERE ca = NEW.ca;
+END;
+
+CREATE INDEX IF NOT EXISTS idx_token_prices_live_symbol
+  ON token_prices_live(symbol);
 """
 
 def get_db_path() -> Path:

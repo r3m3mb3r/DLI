@@ -26,7 +26,7 @@ DB_PATH = _load_db_path()
 
 
 
-""" TOKEN DATA HELPERS """
+# --- TOKEN DATA HELPERS ---
 
 SQL_UPSERT_TOKEN_PAIR = """
 INSERT INTO token_pairs (
@@ -67,4 +67,54 @@ def upsert_token_pair(
 
 
 
-""" TOKEN DATA HELPERS END """
+# --- TOKEN DATA HELPERS END ---
+
+
+
+# --- LIVE PRICE HELPERS ---
+
+SQL_UPSERT_TOKEN_PRICE = """
+INSERT INTO token_prices_live (ca, symbol, price)
+VALUES (?, ?, ?)
+ON CONFLICT(ca) DO UPDATE SET
+  symbol = excluded.symbol,
+  price  = excluded.price;
+-- timestamp auto-updated by trigger in schema
+"""
+
+SQL_SELECT_TOKEN_PRICE = """
+SELECT ca, symbol, price, timestamp
+FROM token_prices_live
+WHERE ca = ?
+"""
+
+def upsert_token_price(*, ca: str, symbol: Optional[str], price: float) -> None:
+    """
+    Upsert the live price for a token (one row per CA).
+    Respects the exact 'ca' casing you pass in (no normalization).
+    """
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute(SQL_UPSERT_TOKEN_PRICE, (ca, symbol, float(price)))
+        conn.commit()
+
+def get_token_price(ca: str) -> Optional[dict]:
+    """
+    Return the current live price row for the given contract address, or None if not found.
+    Shape: {"ca": ..., "symbol": ..., "price": float, "timestamp": int}
+    """
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        cur = conn.execute(SQL_SELECT_TOKEN_PRICE, (ca,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "ca": row["ca"],
+            "symbol": row["symbol"],
+            "price": float(row["price"]),
+            "timestamp": int(row["timestamp"]),
+        }
+
+
+# --- LIVE PRICE HELPERS END ---
