@@ -8,13 +8,8 @@
     "0x0FB597D6cFE5bE0d5258A7f017599C2A4Ece34c7"
   ],
   "ladder_values": [
-    1,
-    5,
     10,
-    25,
-    50,
     100,
-    250,
     500,
     1000,
     2500,
@@ -23,11 +18,20 @@
     25000,
     50000,
     100000,
-    250000,
-    500000
+    250000
   ],
   "ladder_baseline_usd": 5,
   "schedule_interval_secs": 300,
   "schedule_enabled": true,
-  "last_scheduler_heartbeat": 1760678483
+  "last_scheduler_heartbeat": 1760725146,
+  "plot_menu": {
+    "limit": 100,
+    "smooth": 1,
+    "show": true,
+    "save": true,
+    "outdir": "plots",
+    "weight_exp": 0.0,
+    "refresh_sec": 30.0,
+    "last_pair": "0x0FB597D6cFE5bE0d5258A7f017599C2A4Ece34c7"
+  }
 }

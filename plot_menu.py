@@ -5,26 +5,22 @@
 #   • One visualization: token price (BASE_USD) vs time
 #   • Below the line: stacked GREEN bands per ladder rung (height ∝ USD^exp, darkness ∝ BUY dominance)
 #   • Above the line: stacked RED bands per ladder rung (height ∝ USD^exp, darkness ∝ SELL dominance)
-#   • NEW: The price line itself switches color per time segment:
-#       - Green where support (BUY) dominates, Red where resistance (SELL) dominates
-#       - Line opacity scales with dominance strength in that segment
+#   • The price line switches color per time segment (green=BUY stronger, red=SELL stronger)
 #
 # Menu:
 #   1) Select pair(s)
-#   2) Configure (limit, smoothing for price, show/save, outdir, weight exponent)
+#   2) Configure (limit, smoothing, show/save, outdir, weight exponent, refresh rate)
 #   3) Plot S/R Banded Overlay
-#   4) Exit
-#
-# Usage:
-#   python plot_menu.py
+#   4) Watch live (uses configured refresh)
+#   5) Exit
 #
 # Requires DB filled by ladder.py:
 #   - ladder_runs(id, started_at, base_usd, pair_address, ...)
 #   - ladder_points(run_id, usd, buy_bps, sell_bps)
 
 import json
-import math
 import sqlite3
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -35,22 +31,57 @@ from db_helper import DB_PATH  # uses config.json under the hood
 
 CONFIG_FILE = Path("config.json")
 
-
 # --------------------------- Config helpers ---------------------------
 
-def load_cfg() -> Dict[str, Any]:
-    if CONFIG_FILE.exists():
+_PM_DEFAULTS = {
+    "limit": 500,
+    "smooth": 1,
+    "show": False,
+    "save": True,
+    "outdir": "plots",
+    "weight_exp": 1.0,
+    "refresh_sec": 5.0,
+    "last_pair": None,  # persisted last selection from "Select pair(s)" menu
+}
+
+def _read_json(path: Path) -> Dict[str, Any]:
+    if path.exists():
         try:
-            return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            return json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             pass
     return {}
+
+def _write_json(path: Path, data: Dict[str, Any]) -> None:
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=False), encoding="utf-8")
+    tmp.replace(path)
+
+def load_cfg() -> Dict[str, Any]:
+    return _read_json(CONFIG_FILE)
+
+def save_cfg(cfg: Dict[str, Any]) -> None:
+    _write_json(CONFIG_FILE, cfg)
 
 def get_monitored_pairs_from_config() -> List[str]:
     cfg = load_cfg()
     addrs = cfg.get("pair_addresses")
     return list(addrs) if isinstance(addrs, list) else []
 
+def _get_pm_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """Return the plot_menu sub-config, creating/merging defaults if needed."""
+    pm = dict(_PM_DEFAULTS)
+    user_pm = cfg.get("plot_menu") or {}
+    for k, v in user_pm.items():
+        if k in pm:
+            pm[k] = v
+    return pm
+
+def _store_pm_cfg(cfg: Dict[str, Any], pm: Dict[str, Any]) -> None:
+    """Persist only the plot_menu subsection, preserving other config keys."""
+    full = dict(cfg)
+    full["plot_menu"] = pm
+    save_cfg(full)
 
 # --------------------------- DB helpers -------------------------------
 
@@ -80,14 +111,19 @@ def get_pair_meta(conn: sqlite3.Connection, pair_address: str) -> Optional[Dict[
     return dict(r) if r else None
 
 def get_runs_for_pair(conn: sqlite3.Connection, pair_address: str, limit: int) -> List[Dict[str, Any]]:
+    # Fetch the latest N (DESC + LIMIT), then re-order ASC for plotting
     cur = conn.execute("""
-        SELECT id, started_at, base_usd
-        FROM ladder_runs
-        WHERE lower(pair_address) = lower(?)
+        SELECT id, started_at, base_usd FROM (
+            SELECT id, started_at, base_usd
+            FROM ladder_runs
+            WHERE lower(pair_address) = lower(?)
+            ORDER BY started_at DESC, id DESC
+            LIMIT ?
+        ) AS recent
         ORDER BY started_at ASC, id ASC
-        LIMIT ?
     """, (pair_address, int(limit)))
     return [dict(r) for r in cur.fetchall()]
+
 
 def get_points_for_run(conn: sqlite3.Connection, run_id: int) -> List[Dict[str, Any]]:
     cur = conn.execute("""
@@ -97,7 +133,6 @@ def get_points_for_run(conn: sqlite3.Connection, run_id: int) -> List[Dict[str, 
         ORDER BY usd ASC
     """, (int(run_id),))
     return [dict(r) for r in cur.fetchall()]
-
 
 # --------------------------- Transforms -------------------------------
 
@@ -131,7 +166,6 @@ def _pad_minmax(vals: List[float], pad_ratio: float = 0.2) -> Tuple[float, float
     pad = span * pad_ratio
     return vmin - pad, vmax + pad
 
-
 # ------- Per-rung dominance and weights (for one run / one ladder) -------
 
 def _per_rung_strengths(points: List[Dict[str, Any]], weight_exp: float):
@@ -162,7 +196,7 @@ def _per_rung_strengths(points: List[Dict[str, Any]], weight_exp: float):
 
         usds.append(usd)
         weights.append(w)
-        # keep alpha within pleasing visible range
+        # clamp alphas to a pleasing range
         sup_alphas.append(max(0.06, min(0.90, sup)))
         res_alphas.append(max(0.06, min(0.90, res)))
 
@@ -173,7 +207,6 @@ def _per_rung_strengths(points: List[Dict[str, Any]], weight_exp: float):
         weights_norm = [w / total_w for w in weights]
 
     return usds, weights_norm, sup_alphas, res_alphas
-
 
 # --------------------------- Series builder ----------------------------
 
@@ -193,7 +226,6 @@ def build_series(conn: sqlite3.Connection, pair: str, limit: int, smooth: int):
         per_run_points.append(pts)
 
     return times, tok_usd, per_run_points, runs
-
 
 # --------------------------- Plotting ---------------------------------
 
@@ -278,7 +310,6 @@ def plot_banded_sr_overlay_for_pair(
         )
 
         # 2) Segment line color = stronger side; opacity scales with dominance
-        #    Compute weighted averages of rung dominance alphas
         seg_sup = sum(w * a for w, a in zip(weights_norm, sup_alphas))
         seg_res = sum(w * a for w, a in zip(weights_norm, res_alphas))
         seg_sum = seg_sup + seg_res
@@ -292,40 +323,142 @@ def plot_banded_sr_overlay_for_pair(
             else:
                 line_color = "red"
                 dom = seg_res - seg_sup
-            # map dominance to alpha in [0.35, 1.0]
             line_alpha = 0.35 + 0.65 * (dom / seg_sum)
 
         ax.plot(xseg, [y0, y1], color=line_color, alpha=line_alpha, linewidth=2.4)
 
-    ax.set_title(f"{bs} — Price with per-rung Support/Resistance bands\n"
-                 f"(band height ∝ USD^exp, band darkness ∝ rung dominance; line color = stronger side; exp={weight_exp:.2f})")
+    ax.set_title(
+        f"{bs} — Price with per-rung Support/Resistance bands\n"
+        f"(band height ∝ USD^exp, band darkness ∝ rung dominance; line color = stronger side; exp={weight_exp:.2f})"
+    )
     ax.set_xlabel("Time (UTC)")
     ax.set_ylabel("USD per 1 BASE")
     ax.grid(True)
 
-        # --- saving ---
+    # --- saving ---
     save_path = None
     if save:
         try:
-            outdir = outdir.resolve()  # absolute path for clarity
+            outdir = outdir.resolve()
             outdir.mkdir(parents=True, exist_ok=True)
 
-            # add a short pair suffix to avoid collisions when multiple tokens share the same symbol
             pair_suffix = pair.lower()[-6:] if isinstance(pair, str) else "pair"
-            fname = f"sr_banded_{bs}_{pair_suffix}_w{weight_exp:.2f}.png"
+            base_fname = f"sr_banded_{bs}_{pair_suffix}_w{weight_exp:.2f}"
+            ext = ".png"
 
-            save_path = outdir / fname
-            fig.savefig(save_path, dpi=150, bbox_inches="tight")  # use fig.savefig (not plt)
+            # Find next available filename with counter
+            candidate = outdir / f"{base_fname}{ext}"
+            counter = 0
+            while candidate.exists():
+                candidate = outdir / f"{base_fname}_{counter:03d}{ext}"
+                counter += 1
+
+            save_path = candidate
+            fig.savefig(save_path, dpi=150, bbox_inches="tight")
             print(f"[save] wrote: {save_path}")
         except Exception as e:
             print(f"[save][error] {e!r}  (dir={outdir})")
+
     if show:
-        plt.show()
+        try:
+            plt.show()
+        except KeyboardInterrupt:
+            pass
     else:
         plt.close(fig)
+
     return save_path
 
+def watch_live_overlay(sess: "Session", refresh_sec: float = 60.0) -> None:
+    with connect() as conn:
+        # pick pair (same logic as before) ...
+        if sess.pair:
+            pair = sess.pair
+        else:
+            cfg_targets = get_monitored_pairs_from_config()
+            if cfg_targets:
+                pair = cfg_targets[0]
+            else:
+                rows = list_pairs(conn)
+                if not rows:
+                    print("(no pairs to watch — add pairs or runs first)")
+                    return
+                pair = rows[0]["pair_address"]
 
+        meta = get_pair_meta(conn, pair)
+        if not meta:
+            print(f"[watch] no metadata for pair {pair}")
+            return
+
+        bs = (meta.get("base_symbol") or "BASE").upper()
+
+        plt.ion()
+        fig, ax = plt.subplots()
+        try:
+            fig.canvas.manager.set_window_title(f"Live: {bs} banded S/R")
+        except Exception:
+            pass
+
+        # cache fixed y-lims if you dislike bouncing; set to None for auto each refresh
+        fixed_ylim = None  # e.g., fixed_ylim = (0.0001, 0.002)
+
+        def redraw(_evt=None):
+            ax.clear()
+            times, tok_usd, per_run_points, runs = build_series(conn, pair, limit=sess.limit, smooth=sess.smooth)
+            if times:
+                if fixed_ylim:
+                    ymin, ymax = fixed_ylim
+                else:
+                    ymin, ymax = _pad_minmax(tok_usd, pad_ratio=0.2)
+                ax.set_ylim(ymin, ymax)
+
+                for i in range(len(times) - 1):
+                    xseg = [times[i], times[i + 1]]
+                    y0, y1 = tok_usd[i], tok_usd[i + 1]
+                    pts = per_run_points[i]
+                    _, weights_norm, sup_alphas, res_alphas = _per_rung_strengths(pts, weight_exp=sess.weight_exp)
+
+                    _draw_banded_side(ax, xseg, y0, y1, ymin, ymin, weights_norm, sup_alphas, "green")
+                    _draw_banded_side(ax, xseg, y0, y1, ymax, ymax, weights_norm, res_alphas, "red")
+
+                    seg_sup = sum(w * a for w, a in zip(weights_norm, sup_alphas))
+                    seg_res = sum(w * a for w, a in zip(weights_norm, res_alphas))
+                    seg_sum = seg_sup + seg_res
+                    if seg_sum <= 1e-6:
+                        line_color, line_alpha = "black", 0.6
+                    else:
+                        if seg_sup >= seg_res:
+                            line_color = "green"; dom = seg_sup - seg_res
+                        else:
+                            line_color = "red"; dom = seg_res - seg_sup
+                        line_alpha = 0.35 + 0.65 * (dom / seg_sum)
+                    ax.plot(xseg, [y0, y1], color=line_color, alpha=line_alpha, linewidth=2.4)
+
+                ax.set_title(f"Live — {bs} S/R Banded Overlay  (exp={sess.weight_exp:.2f}, smooth={sess.smooth})")
+                ax.set_xlabel("Time (UTC)")
+                ax.set_ylabel("USD per 1 BASE")
+                ax.grid(True)
+            else:
+                ax.set_title("No runs yet — waiting for data...")
+                ax.grid(True)
+
+            fig.canvas.draw_idle()
+            fig.canvas.flush_events()
+
+        # first draw
+        redraw()
+
+        # non-blocking timer fires every refresh_sec
+        timer = fig.canvas.new_timer(interval=int(refresh_sec * 1000))
+        timer.add_callback(redraw)
+        timer.start()
+
+        try:
+            plt.show(block=True)  # hand control to GUI loop; close window to exit
+        except KeyboardInterrupt:
+            pass
+        finally:
+            plt.ioff()
 
 # --------------------------- Interactive menu -------------------------
 
@@ -343,13 +476,33 @@ def _press_enter() -> None:
 
 class Session:
     def __init__(self) -> None:
-        self.limit: int = 500
-        self.smooth: int = 1              # price smoothing (only)
-        self.show: bool = False
-        self.save: bool = True
-        self.outdir: Path = Path("plots")
-        self.pair: Optional[str] = None   # None => iterate all targets
-        self.weight_exp: float = 1.0      # rung weight = USD^exp (0: equal per rung; 1: linear; 2: emphasize large)
+        # Fill from config on construction
+        cfg = load_cfg()
+        pm = _get_pm_cfg(cfg)
+        self.limit: int = int(pm.get("limit", _PM_DEFAULTS["limit"]))
+        self.smooth: int = int(pm.get("smooth", _PM_DEFAULTS["smooth"]))        # price smoothing (only)
+        self.show: bool = bool(pm.get("show", _PM_DEFAULTS["show"]))
+        self.save: bool = bool(pm.get("save", _PM_DEFAULTS["save"]))
+        self.outdir: Path = Path(str(pm.get("outdir", _PM_DEFAULTS["outdir"])))
+        self.pair: Optional[str] = pm.get("last_pair") or None  # None => iterate all targets
+        self.weight_exp: float = float(pm.get("weight_exp", _PM_DEFAULTS["weight_exp"]))
+        self.refresh_sec: float = float(pm.get("refresh_sec", _PM_DEFAULTS["refresh_sec"]))
+
+    # Persist current session values back to config.json
+    def save_to_config(self) -> None:
+        cfg = load_cfg()
+        pm = _get_pm_cfg(cfg)
+        pm.update({
+            "limit": int(self.limit),
+            "smooth": int(self.smooth),
+            "show": bool(self.show),
+            "save": bool(self.save),
+            "outdir": str(self.outdir),
+            "last_pair": self.pair,
+            "weight_exp": float(self.weight_exp),
+            "refresh_sec": float(self.refresh_sec),
+        })
+        _store_pm_cfg(cfg, pm)
 
 def pick_pair_menu(conn: sqlite3.Connection, sess: Session) -> None:
     cfg_targets = get_monitored_pairs_from_config()
@@ -365,7 +518,8 @@ def pick_pair_menu(conn: sqlite3.Connection, sess: Session) -> None:
     for i, (pa, meta) in enumerate(metas, start=1):
         bs = (meta.get("base_symbol") if meta else None) or "BASE"
         qs = (meta.get("quote_symbol") if meta else None) or "QUOTE"
-        print(f"  {i}) {bs}/{qs}  {pa}")
+        sel = " *" if sess.pair and sess.pair.lower() == pa.lower() else ""
+        print(f"  {i}) {bs}/{qs}  {pa}{sel}")
     print(f"  {len(metas) + 1}) ALL (iterate over each)")
 
     choice = _inp("> ").strip()
@@ -384,6 +538,11 @@ def pick_pair_menu(conn: sqlite3.Connection, sess: Session) -> None:
         print("[ok] will iterate over all targets")
     else:
         print("Invalid selection.")
+        _press_enter()
+        return
+
+    # persist the last selection
+    sess.save_to_config()
     _press_enter()
 
 def config_menu(sess: Session) -> None:
@@ -395,25 +554,41 @@ def config_menu(sess: Session) -> None:
         print(f"  4) Show interactively: {sess.show}")
         print(f"  5) Output directory: {sess.outdir}")
         print(f"  6) Rung weight exponent (USD^exp): {sess.weight_exp:.2f}")
-        print("  7) Back")
+        print(f"  7) Live refresh interval (sec): {sess.refresh_sec:.2f}")
+        print("  8) Back")
         ch = _inp("> ").strip()
         if ch == "1":
-            sess.limit = int(_inp("Max runs to load (e.g., 500): ").strip() or "500")
+            sess.limit = int(_inp("Max runs to load (e.g., 500): ").strip() or str(sess.limit))
+            sess.save_to_config()
         elif ch == "2":
-            sess.smooth = int(_inp("Smoothing window (>=2 to enable): ").strip() or "1")
+            sess.smooth = int(_inp("Smoothing window (>=2 to enable): ").strip() or str(sess.smooth))
+            sess.save_to_config()
         elif ch == "3":
             sess.save = (_inp("Save PNGs? [Y/n]: ").strip().lower() != "n")
+            sess.save_to_config()
         elif ch == "4":
             sess.show = (_inp("Show interactively? [y/N]: ").strip().lower() == "y")
+            sess.save_to_config()
         elif ch == "5":
-            p = _inp("Output folder (default plots): ").strip() or "plots"
+            p = _inp("Output folder (default plots): ").strip() or str(sess.outdir)
             sess.outdir = Path(p)
+            sess.save_to_config()
         elif ch == "6":
             try:
-                sess.weight_exp = float(_inp("exp (0=equal, 1=linear, 2=quadratic): ").strip() or "1")
+                sess.weight_exp = float(_inp("exp (0=equal, 1=linear, 2=quadratic): ").strip() or str(sess.weight_exp))
             except Exception:
                 print("[err] invalid float")
+            sess.save_to_config()
         elif ch == "7":
+            try:
+                val = float(_inp("Live refresh interval in seconds (e.g., 5): ").strip() or str(sess.refresh_sec))
+                if not (0.1 <= val <= 3600):
+                    print("[warn] clamp refresh to [0.1, 3600] seconds")
+                sess.refresh_sec = max(0.1, min(3600.0, val))
+            except Exception:
+                print("[err] invalid number")
+            sess.save_to_config()
+        elif ch == "8":
             return
         else:
             print("Invalid choice.")
@@ -457,13 +632,14 @@ def overlay_menu(sess: Session) -> None:
         _press_enter()
 
 def main_menu() -> None:
-    sess = Session()
+    sess = Session()  # auto-loads config
     while True:
         print("\n=== Token S/R Banded Overlay ===")
         print("  1) Select pair(s)")
         print("  2) Configure")
         print("  3) Plot S/R Banded Overlay")
-        print("  4) Exit")
+        print(f"  4) Watch live ({sess.refresh_sec:.1f}s refresh)")
+        print("  5) Exit")
         choice = _inp("> ").strip()
         if choice == "1":
             with connect() as conn:
@@ -473,6 +649,8 @@ def main_menu() -> None:
         elif choice == "3":
             overlay_menu(sess)
         elif choice == "4":
+            watch_live_overlay(sess, refresh_sec=sess.refresh_sec)
+        elif choice == "5":
             print("Bye!")
             return
         else:

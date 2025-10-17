@@ -120,21 +120,27 @@ def pick_pair(conn: sqlite3.Connection, cfg: Dict[str, Any]) -> Optional[sqlite3
 
 # --------------------------- USD Pricing --------------------------------
 
-def get_token_usd(cfg: Dict[str, Any], token_ca: str) -> float:
+def get_token_usd(cfg: Dict[str, Any], token_ca: str, *, ttl_sec: int = 60, force_refresh: bool = False) -> float:
     """
-    Try DB first; fallback to Birdeye token_overview; upsert to DB.
+    Read cached USD price from DB. If missing/stale (or force_refresh), hit Birdeye and upsert.
     Returns USD per 1 token (float).
     """
-    row = get_token_price(token_ca)
-    if row and row.get("price") not in (None, 0):
-        return float(row["price"])
+    now = int(time.time())
+    row = get_token_price(token_ca)  # expects fields: price, last_refreshed_ts, symbol
+    if row and not force_refresh:
+        price = row.get("price")
+        ts = int(row.get("last_refreshed_ts") or 0)
+        if price not in (None, 0) and (now - ts) <= ttl_sec:
+            return float(price)
 
+    # stale or missing → refresh via Birdeye
     api = cfg.get("birdeye_api_key")
     chain = _chain_from_id(int(cfg.get("chain_id", 8453)))
     payload = fetch_token_overview(token_ca, api, chain)
     symbol, price = extract_symbol_price(payload)
     upsert_token_price(ca=token_ca, symbol=symbol, price=float(price))
     return float(price)
+
 
 
 # --------------------------- Baseline Quotes -----------------------------
@@ -340,7 +346,8 @@ def run(
     quote_dec = int(pair["quote_decimals"])
 
     # --- fetch USD for quote token (WETH typical, but works for any quote) ---
-    quote_usd_f = get_token_usd(cfg, quote_addr)
+    quote_usd_f = get_token_usd(cfg, quote_addr, ttl_sec=60, force_refresh=False)
+
     quote_usd = Decimal(str(quote_usd_f))
 
     # --- baselines ---
@@ -360,6 +367,11 @@ def run(
         quote_usd=quote_usd,
         baseline_usd=baseline_d,
     )
+
+    try:
+        upsert_token_price(ca=base_addr, symbol=(base_sym or "BASE"), price=float(base_usd))
+    except Exception as e:
+        print(f"[warn] failed to cache BASE_USD: {e}")
 
     # --- sweep ---
     ladder = usd_ladder or DEFAULT_USD_LADDER
