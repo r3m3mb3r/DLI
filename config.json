@@ -1,13 +1,32 @@
-
 {
-
-    "0x_api_key": "d0778e81-e1ae-467b-aef3-0d7c5f5ff279",
-    "birdeye_api_key": "2391fc5931f2403780b25891f8819777",
-    "db_path": "liquidity.db",
-    "chain_id": 8453,
-
-
-    "pair_addresses": [
+  "0x_api_key": "d0778e81-e1ae-467b-aef3-0d7c5f5ff279",
+  "birdeye_api_key": "2391fc5931f2403780b25891f8819777",
+  "db_path": "liquidity.db",
+  "chain_id": 8453,
+  "pair_addresses": [
     "0xBA3F945812a83471d709BCe9C3CA699A19FB46f7"
-    ]
+  ],
+  "ladder_values": [
+    1,
+    5,
+    10,
+    25,
+    50,
+    100,
+    250,
+    500,
+    1000,
+    2500,
+    5000,
+    10000,
+    25000,
+    50000,
+    100000,
+    250000,
+    500000
+  ],
+  "ladder_baseline_usd": 5,
+  "schedule_interval_secs": 300,
+  "schedule_enabled": true,
+  "last_scheduler_heartbeat": 1760674445
 }
