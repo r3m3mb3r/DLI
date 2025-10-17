@@ -15,7 +15,7 @@ import requests
 from db_helper import upsert_token_pair  # uses config.json for DB path
 
 # ====== USER SETTINGS ======
-token_address = "0x52b492a33E447Cdb854c7FC19F1e57E8BfA1777D"  # Base token contract (0x...)
+token_address = "0x532f27101965dd16442E59d40670FaF5eBB142E4"  # Base token contract (0x...)
 
 # ====== CONSTANTS ======
 CONFIG_FILE = "config.json"

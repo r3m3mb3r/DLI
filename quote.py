@@ -20,11 +20,11 @@ BASE_PEPE = "0x52b492a33E447Cdb854c7FC19F1e57E8BfA1777D"  # BasedPepe (Base)
 PAIR_ADDRESS = "0x0FB597D6cFE5bE0d5258A7f017599C2A4Ece34c7"  # not used by 0x; for reference only
 WETH = "0x4200000000000000000000000000000000000006"        # WETH (Base)
 
-# --- Decimals (both 18 as requested) ---
+# --- Decimals ---
 DECIMALS_TOKEN = 18
 DECIMALS_WETH = 18
 
-# --- Human-readable sell sizes (adjust freely) ---
+# --- Human-readable sell sizes ---
 SELL_WETH_AMOUNT_HUMAN = "0.01"       # 0.01 WETH
 SELL_TOKEN_AMOUNT_HUMAN = "1000000"   # 1,000,000 BASE_PEPE tokens
 

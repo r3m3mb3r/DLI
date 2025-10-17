@@ -53,6 +53,54 @@ END;
 
 CREATE INDEX IF NOT EXISTS idx_token_prices_live_symbol
   ON token_prices_live(symbol);
+
+----------------------------------------------------------------
+-- Fixed-ladder snapshot (one row per measurement)
+-- Values are price impact in basis points (bps) vs an internal
+-- baseline (e.g., baseline_usd=5.0) per direction.
+----------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS liquidity_ladder_fixed (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts             INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+
+  -- context
+  base_address   TEXT NOT NULL,
+  base_symbol    TEXT,
+  pair_address   TEXT NOT NULL,
+  quote_address  TEXT NOT NULL,
+  quote_symbol   TEXT,
+  chain          TEXT,
+
+  price_usd      REAL,         -- base token USD price at snapshot (Birdeye or other)
+
+  -- BUY side (quote -> base): impact bps at each USD rung
+  buy_bps_usd_1        REAL,
+  buy_bps_usd_100      REAL,
+  buy_bps_usd_500      REAL,
+  buy_bps_usd_1000     REAL,
+  buy_bps_usd_5000     REAL,
+  buy_bps_usd_10000    REAL,
+  buy_bps_usd_25000    REAL,
+  buy_bps_usd_75000    REAL,
+  buy_bps_usd_100000   REAL,
+
+  -- SELL side (base -> quote): impact bps at each USD rung
+  sell_bps_usd_1       REAL,
+  sell_bps_usd_100     REAL,
+  sell_bps_usd_500     REAL,
+  sell_bps_usd_1000    REAL,
+  sell_bps_usd_5000    REAL,
+  sell_bps_usd_10000   REAL,
+  sell_bps_usd_25000   REAL,
+  sell_bps_usd_75000   REAL,
+  sell_bps_usd_100000  REAL
+);
+
+CREATE INDEX IF NOT EXISTS idx_liq_ladder_fixed_base_ts
+  ON liquidity_ladder_fixed(base_address, ts DESC);
+
+CREATE INDEX IF NOT EXISTS idx_liq_ladder_fixed_pair_ts
+  ON liquidity_ladder_fixed(pair_address, ts DESC);
 """
 
 def get_db_path() -> Path:
