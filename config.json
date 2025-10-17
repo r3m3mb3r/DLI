@@ -4,7 +4,8 @@
   "db_path": "liquidity.db",
   "chain_id": 8453,
   "pair_addresses": [
-    "0xBA3F945812a83471d709BCe9C3CA699A19FB46f7"
+    "0xBA3F945812a83471d709BCe9C3CA699A19FB46f7",
+    "0x0FB597D6cFE5bE0d5258A7f017599C2A4Ece34c7"
   ],
   "ladder_values": [
     1,
@@ -28,5 +29,5 @@
   "ladder_baseline_usd": 5,
   "schedule_interval_secs": 300,
   "schedule_enabled": true,
-  "last_scheduler_heartbeat": 1760674445
+  "last_scheduler_heartbeat": 1760678483
 }
